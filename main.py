@@ -21,7 +21,7 @@ async def main():
         the_client.subscribe(sub_id='btc_txs',
                              handlers=[tx_handler],
                              filters={
-                                 'kinds': [Event.KIND_TEXT_NOTE]
+                                 'kinds': [Event.KIND_BTC_TX]
                              })
 
     async with ClientPool(clients=clients,
