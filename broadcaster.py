@@ -13,12 +13,21 @@ import aiohttp
 from monstr.client.client import ClientPool, Client
 from monstr.client.event_handlers import EventHandler
 from monstr.event.event import Event
+from util import is_valid_tx
 
-# options this are defaults, TODO: from cmd line and toml file
-# relays to output to
-relays = 'ws://localhost:8081'.split(',')
-# default to main net
-network = 'main'
+
+async def do_event_post_api(to_url:str, evt: Event):
+    tx_hex = evt.content
+    if not is_valid_tx(tx_hex):
+        print('ignoring invalid tx hex: %s' % tx_hex)
+
+    # change to bytes for posting
+    tx_hex = tx_hex.encode('utf8')
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(to_url, data=tx_hex) as resp:
+            print(resp.status)
+            print(await resp.text())
 
 
 class MempoolEventHandler(EventHandler):
@@ -36,22 +45,36 @@ class MempoolEventHandler(EventHandler):
         self._post_url = MempoolEventHandler.url_map[network]
 
     def do_event(self, the_client: Client, sub_id, evt: Event):
+        asyncio.create_task(do_event_post_api(self._post_url, evt))
 
-        async def do_post():
-            content = evt.content.encode('utf8')
-            async with aiohttp.ClientSession() as session:
-                async with session.post(self._post_url, data=content) as resp:
-                    print(resp.status)
-                    print(await resp.text())
 
-        asyncio.create_task(do_post())
+class BlockstreamEventHandler(EventHandler):
+
+    url_map = {
+        'main': 'https://blockstream.info/api/tx',
+        'test': 'https://blockstream.info/testnet/api/tx'
+    }
+
+    def __init__(self, network='main'):
+        if network not in MempoolEventHandler.url_map:
+            raise ValueError('unsupported network for Blockstream rebroadcaster - %s' % network)
+
+        self._post_url = BlockstreamEventHandler.url_map[network]
+
+    def do_event(self, the_client: Client, sub_id, evt: Event):
+        asyncio.create_task(do_event_post_api(self._post_url, evt))
 
 
 async def main():
+    # options this are defaults, TODO: from cmd line and toml file
+    # relays to output to
+    relays = 'ws://localhost:8081'.split(',')
+    # default to main net
+    network = 'test'
 
     def on_connect(the_client: Client):
         the_client.subscribe(sub_id='btc_txs',
-                             handlers=MempoolEventHandler(),
+                             handlers=BlockstreamEventHandler(network),
                              filters={
                                  'kinds': [Event.KIND_BTC_TX]
                              })
