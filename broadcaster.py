@@ -2,8 +2,8 @@
     The broadcaster monitors a number of relays for raw bitcoin tx events (Kind 28333)
     on seeing a bitcoin tx it will broadcast via a broadcast method -
 
-        mempoolapi          TODO
-        blockstraminfo      TODO
+        mempoolapi          DONE
+        blockstraminfo      DONE
         bitcoinrpc          TODO
 
 """

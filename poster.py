@@ -105,11 +105,11 @@ def get_args():
 
 async def main(args: Namespace):
 
-    # new keys created on each run, not sure theres any reason you'd want to use same?
-    # events are trasient anyway so you probably won't be able to refecth old events you posted
-    keys = Keys()
 
     def post_tx(tx_hex: str):
+        # new keys generated for each event
+        keys = Keys()
+
         n_evt = Event(
             kind=Event.KIND_BTC_TX,
             content=tx_hex,
