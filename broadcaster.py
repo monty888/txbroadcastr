@@ -9,60 +9,60 @@
 """
 import logging
 import asyncio
-import aiohttp
 from monstr.client.client import ClientPool, Client
 from monstr.client.event_handlers import EventHandler
 from monstr.event.event import Event
-from util import is_valid_tx
+from util import post_tx_api
+
+# mappings to post a tx via mempool
+mempool_url_map = {
+    'mainnet': 'https://mempool.space/api/tx',
+    'testnet': 'https://mempool.space/testnet/api/tx',
+    'signet': 'https://mempool.space/signet/api/tx"'
+}
+
+# and same via blockstream
+blockstream_url_map = {
+    'mainnet': 'https://blockstream.info/api/tx',
+    'testnet': 'https://blockstream.info/testnet/api/tx'
+}
 
 
-async def do_event_post_api(to_url:str, evt: Event):
-    tx_hex = evt.content
-    if not is_valid_tx(tx_hex):
-        print('ignoring invalid tx hex: %s' % tx_hex)
+def get_event_url_map(evt:Event, network:str, url_map: dict):
+    url, err = None, None
 
-    # change to bytes for posting
-    tx_hex = tx_hex.encode('utf8')
+    # if any then we'll be getting the network from the network tag on the event
+    if network == 'any':
+        network_tags = evt.get_tags_value('network')
+        if network_tags:
+            network = network_tags[0]
+        else:
+            return None, 'event has no network tag!, id: %s' % evt.id
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(to_url, data=tx_hex) as resp:
-            print(resp.status)
-            print(await resp.text())
+    if network in url_map:
+        ret = url_map[network]
+    else:
+        err = 'no url mapping found for network - %s' % network
 
-
-class MempoolEventHandler(EventHandler):
-
-    url_map = {
-        'main': 'https://mempool.space/api/tx',
-        'test': 'https://mempool.space/testnet/api/tx',
-        'signet': 'https://mempool.space/signet/api/tx"'
-    }
-
-    def __init__(self, network='main'):
-        if network not in MempoolEventHandler.url_map:
-            raise ValueError('unsupported network for Mempool rebroadcaster - %s' % network)
-
-        self._post_url = MempoolEventHandler.url_map[network]
-
-    def do_event(self, the_client: Client, sub_id, evt: Event):
-        asyncio.create_task(do_event_post_api(self._post_url, evt))
+    return ret, err
 
 
-class BlockstreamEventHandler(EventHandler):
+class APIEventHandler(EventHandler):
 
-    url_map = {
-        'main': 'https://blockstream.info/api/tx',
-        'test': 'https://blockstream.info/testnet/api/tx'
-    }
-
-    def __init__(self, network='main'):
-        if network not in MempoolEventHandler.url_map:
-            raise ValueError('unsupported network for Blockstream rebroadcaster - %s' % network)
-
-        self._post_url = BlockstreamEventHandler.url_map[network]
+    def __init__(self, api_name:str, url_map: dict, network:str = 'any'):
+        self._api_name = api_name
+        self._url_map = url_map
+        self._network = network
 
     def do_event(self, the_client: Client, sub_id, evt: Event):
-        asyncio.create_task(do_event_post_api(self._post_url, evt))
+        post_url, err = get_event_url_map(evt=evt,
+                                          network=self._network,
+                                          url_map=self._url_map)
+        if err:
+            logging.info('%s::do_event - unable to broadcast event err - %s' % (self._api_name,
+                                                                                err))
+        else:
+            asyncio.create_task(post_tx_api(post_url, evt))
 
 
 async def main():
@@ -70,11 +70,19 @@ async def main():
     # relays to output to
     relays = 'ws://localhost:8081'.split(',')
     # default to main net
-    network = 'test'
+    network = 'any'
+
+    # create the tx broadcasters, TODO: which ones enabled should be from cmd line
+    mempool_event_handler = APIEventHandler(api_name='mempool',
+                                            url_map=mempool_url_map,
+                                            network=network)
+    blockstream_event_handler = APIEventHandler(api_name='blockstream',
+                                                url_map=blockstream_url_map,
+                                                network=network)
 
     def on_connect(the_client: Client):
         the_client.subscribe(sub_id='btc_txs',
-                             handlers=BlockstreamEventHandler(network),
+                             handlers=blockstream_event_handler,
                              filters={
                                  'kinds': [Event.KIND_BTC_TX]
                              })

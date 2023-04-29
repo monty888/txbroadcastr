@@ -7,8 +7,7 @@ import argparse
 from argparse import Namespace
 from util import is_valid_tx
 from monstr.client.client import ClientPool
-from monstr.encrypt import Keys
-from monstr.event.event import Event
+from util import get_nostr_bitcoin_tx_event
 
 
 class ConfigError(Exception):
@@ -35,6 +34,8 @@ def get_args():
 
     parser.add_argument('-r', '--relay', action='store', default=None,
                         help='when --output includes nostr this is a comma seperated list of relays to post to')
+    parser.add_argument('-n', '--network', action='store', default='mainnet',  choices=['mainnet', 'testnet', 'signet'],
+                        help='bitcoin network for the bitcoin transactions to be posted on')
     parser.add_argument('-e', '--hex', action='store', default=None,
                         help='raw bitcoin tx hex')
     parser.add_argument('-f', '--filename', action='store', default=None,
@@ -105,18 +106,9 @@ def get_args():
 
 async def main(args: Namespace):
 
-
-    def post_tx(tx_hex: str):
-        # new keys generated for each event
-        keys = Keys()
-
-        n_evt = Event(
-            kind=Event.KIND_BTC_TX,
-            content=tx_hex,
-            pub_key=keys.public_key_hex()
-        )
-        n_evt.sign(keys.private_key_hex())
-        cp.publish(n_evt)
+    def post_tx(hex: str):
+        cp.publish(get_nostr_bitcoin_tx_event(tx_hex=hex,
+                                              network=args.network))
 
     def post_files(dir: str):
         # find tx files
