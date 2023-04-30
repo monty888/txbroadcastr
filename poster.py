@@ -7,7 +7,7 @@ import argparse
 from argparse import Namespace
 from util import is_valid_tx
 from monstr.client.client import ClientPool
-from util import get_nostr_bitcoin_tx_event
+from util import get_nostr_bitcoin_tx_event, APIServiceURLMap, post_hex_tx_api
 
 
 class ConfigError(Exception):
@@ -89,7 +89,7 @@ def get_args():
     for o in ret.output:
         if o not in ('nostr', 'mempool', 'blockstream', 'bitcoind'):
             raise ConfigError('value %s is not a valid output' % o)
-        if o in ('mempool', 'blockstream', 'bitcoind'):
+        if o in ('bitcoind'):
             raise ConfigError('output %s not yet implemented' % o)
 
     if ret.watch:
@@ -106,9 +106,40 @@ def get_args():
 
 async def main(args: Namespace):
 
-    def post_tx(hex: str):
-        cp.publish(get_nostr_bitcoin_tx_event(tx_hex=hex,
+    api_mappers = {
+        'mempool': APIServiceURLMap('mempool'),
+        'blockstream': APIServiceURLMap('blockstream')
+    }
+
+    def post_tx_nostr(tx_hex: str):
+        cp.publish(get_nostr_bitcoin_tx_event(tx_hex=tx_hex,
                                               network=args.network))
+
+    def get_post_api(api):
+        mapper = api_mappers[api]
+
+        def api_post(tx_hex: str):
+            to_url, err = mapper.get_url_map(args.network)
+            if err:
+                logging.info('post_tx to %s - unable to broadcast event err - %s' % (api,
+                                                                                     err))
+            else:
+                asyncio.create_task(post_hex_tx_api(to_url=to_url,
+                                                    tx_hex=tx_hex))
+
+        return api_post
+
+
+
+    my_posters = {
+        'nostr': post_tx_nostr,
+        'mempool': get_post_api('mempool'),
+        'blockstream': get_post_api('blockstream')
+    }
+
+    def do_tx_post(tx_hex: str):
+        for c_out in args.output:
+            my_posters[c_out](tx_hex)
 
     def post_files(dir: str):
         # find tx files
@@ -116,24 +147,24 @@ async def main(args: Namespace):
 
         for c_filename in tx_files:
             try:
-                tx_data = load_tx(c_filename)
+                tx_hex = load_tx(c_filename)
             # TODO: create a error dir and move file there
             except InvalidTxHex as bad_file:
                 pass
 
             # post the tx and then move the file to dir/done
-            post_tx(tx_data)
+            do_tx_post(tx_hex)
             shutil.move(c_filename, c_filename.replace(dir, '%s/done' % dir))
 
     async with ClientPool(clients=args.relay) as cp:
 
         # posting of any hex supplied as arg
         if args.hex:
-            post_tx(args.hex)
+            do_tx_post(args.hex)
 
         # # filename option, file_data should exist
         if args.filename:
-            post_tx(args.file_data)
+            do_tx_post(args.file_data)
 
         if args.dir:
             post_files(args.dir)
