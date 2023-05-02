@@ -52,6 +52,10 @@ def get_nostr_bitcoin_tx_event(tx_hex: str, network: str) -> Event:
     return ret
 
 
+class ConfigError(Exception):
+    pass
+
+
 class APIServiceURLMap:
 
     service_maps = {
@@ -75,21 +79,10 @@ class APIServiceURLMap:
         self._url_map = APIServiceURLMap.service_maps[service_name]
 
     def get_url_map(self, network: str):
-        url, err = None, None
         if network in self._url_map:
             ret = self._url_map[network]
         else:
-            err = 'no url mapping found for network - %s' % network
+            raise ValueError('no url mapping found for network - %s' % network)
+        return ret
 
-        return ret, err
 
-    def get_url_map_event(self, evt: Event, network: str):
-        # if any then we'll be getting the network from the network tag on the event
-        if network == 'any':
-            network_tags = evt.get_tags_value('network')
-            if network_tags:
-                network = network_tags[0]
-            else:
-                return None, 'event has no network tag!, id: %s' % evt.id
-
-        return self.get_url_map(network)

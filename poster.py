@@ -7,11 +7,7 @@ import argparse
 from argparse import Namespace
 from util import is_valid_tx
 from monstr.client.client import ClientPool
-from util import get_nostr_bitcoin_tx_event, APIServiceURLMap, post_hex_tx_api
-
-
-class ConfigError(Exception):
-    pass
+from util import get_nostr_bitcoin_tx_event, APIServiceURLMap, post_hex_tx_api, ConfigError
 
 
 class InvalidTxHex(Exception):
@@ -32,7 +28,7 @@ def get_args():
         description='broadcast raw bitcoin txs to nostr or direct to mempool, blockstreaminfo, or via local bitcoin node'
     )
 
-    parser.add_argument('-r', '--relay', action='store', default=None,
+    parser.add_argument('-r', '--relay', action='store', default='ws://localhost:8081',
                         help='when --output includes nostr this is a comma seperated list of relays to post to')
     parser.add_argument('-n', '--network', action='store', default='mainnet',  choices=['mainnet', 'testnet', 'signet'],
                         help='bitcoin network for the bitcoin transactions to be posted on')
@@ -119,17 +115,15 @@ async def main(args: Namespace):
         mapper = api_mappers[api]
 
         def api_post(tx_hex: str):
-            to_url, err = mapper.get_url_map(args.network)
-            if err:
-                logging.info('post_tx to %s - unable to broadcast event err - %s' % (api,
-                                                                                     err))
-            else:
+            try:
+                to_url = mapper.get_url_map(args.network)
                 asyncio.create_task(post_hex_tx_api(to_url=to_url,
                                                     tx_hex=tx_hex))
+            except ValueError as ve:
+                logging.info('post_tx to %s - unable to broadcast event err - %s' % (api,
+                                                                                     ve))
 
         return api_post
-
-
 
     my_posters = {
         'nostr': post_tx_nostr,
@@ -154,7 +148,7 @@ async def main(args: Namespace):
 
             # post the tx and then move the file to dir/done
             do_tx_post(tx_hex)
-            shutil.move(c_filename, c_filename.replace(dir, '%s/done' % dir))
+            shutil.move(c_filename, c_filename.replace(dir.strip('/'), '%s/done' % dir))
 
     async with ClientPool(clients=args.relay) as cp:
 
