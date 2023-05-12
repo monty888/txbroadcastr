@@ -1,4 +1,6 @@
+import json
 import aiohttp
+from aiohttp import ClientSession
 from bitcoinlib.transactions import Transaction
 from monstr.event.event import Event
 from monstr.encrypt import Keys
@@ -31,8 +33,33 @@ async def post_hex_tx_api(to_url: str, tx_hex: str):
     print(to_url)
     async with aiohttp.ClientSession() as session:
         async with session.post(to_url, data=tx_hex) as resp:
-            print(resp.status)
-            print(await resp.text())
+            if resp.status == 200:
+                print(await resp.text())
+            else:
+                print('post_hex_tx_api::post %s - bad status %s' % (to_url, resp.status))
+
+
+async def sendrawtransaction_bitcoind(to_url: str, user: str, password: str, tx_hex: str):
+    try:
+        async with ClientSession() as session:
+            async with session.post(
+                    url=to_url,
+                    data=json.dumps({
+                        'method': 'sendrawtransaction',
+                        'params': [tx_hex]
+                        # probably should send but doesn't cause issue that we don't....
+                        # 'jsonrpc': '2.0',
+                        # 'id': 1
+                    }),
+                    auth=aiohttp.BasicAuth(user, password)
+            ) as resp:
+                if resp.status == 200:
+                    print(await resp.text())
+                else:
+                    print('sendrawtransaction_bitcoind::post %s - bad status %s' % (to_url, resp.status))
+
+    except Exception as e:
+        print(e)
 
 
 def get_nostr_bitcoin_tx_event(tx_hex: str, network: str) -> Event:
@@ -68,6 +95,11 @@ class APIServiceURLMap:
         'blockstream': {
             'mainnet': 'https://blockstream.info/api/tx',
             'testnet': 'https://blockstream.info/testnet/api/tx'
+        },
+        'bitcoind': {
+            'mainnet': 'http://localhost:8332',
+            'testnet': 'http://localhost:18332',
+            'signet': 'http://localhost:38332'
         }
 
     }

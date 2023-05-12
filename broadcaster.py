@@ -4,7 +4,7 @@
 
         mempoolapi          DONE
         blockstraminfo      DONE
-        bitcoinrpc          TODO
+        bitcoinrpc          DONE
 
 """
 import logging
@@ -13,7 +13,7 @@ import argparse
 from monstr.client.client import ClientPool, Client
 from monstr.client.event_handlers import EventHandler
 from monstr.event.event import Event
-from util import post_event_tx_api, APIServiceURLMap, ConfigError
+from util import post_event_tx_api, APIServiceURLMap, ConfigError, sendrawtransaction_bitcoind
 
 
 class APIEventHandler(EventHandler):
@@ -43,6 +43,40 @@ class APIEventHandler(EventHandler):
                                                                                 ve))
 
 
+class BitcoindEventHandler(EventHandler):
+    """
+        as APIEventHandler but to local bitcoind
+    """
+    def __init__(self, user: str, password: str, network: str = 'any'):
+        self._map = APIServiceURLMap(service_name='bitcoind')
+        self._user = user
+        self._password = password
+        self._network = network
+
+    def do_event(self, the_client: Client, sub_id, evt: Event):
+        network_tags = evt.get_tags_value('network')
+        if network_tags is None:
+            logging.debug('%s::do_event - event missing network tag: %s' % evt)
+            return
+
+        network = network_tags[0]
+        if self._network != 'any' and network != self._network:
+            logging.debug('%s::do_event - ignore event: %s for network %s' % (evt,
+                                                                              network))
+            return
+
+        try:
+            # TODO: ix the test tx/post to make it a bit cleaner between this and the url style posters
+            asyncio.create_task(sendrawtransaction_bitcoind(to_url=self._map.get_url_map(network),
+                                                            user=self._user,
+                                                            password=self._password,
+                                                            tx_hex=evt.content))
+            # asyncio.create_task(post_event_tx_api(evt=evt,
+            #                                       to_url=self._map.get_url_map(network)))
+        except ValueError as ve:
+            logging.info('bitcoind::do_event - unable to broadcast event err - %s' % ve)
+
+
 def get_args():
     parser = argparse.ArgumentParser(
         prog='nostr bitcointx broadcaster',
@@ -60,7 +94,14 @@ def get_args():
                         help="""comma seperated list of outputs to broadcast txs valid values are mempool, blockstream, or
                         bitcoind
                         """)
-
+    parser.add_argument('-u', '--user', action='store',
+                        help="""
+                        rpc username for bitcoind, required if output bitcoind
+                        """)
+    parser.add_argument('-p', '--password', action='store',
+                        help="""
+                        rpc password for bitcoind, required if output bitcoind
+                        """)
 
     parser.add_argument('--debug', action='store_true', help='enable debug output')
 
@@ -72,8 +113,8 @@ def get_args():
     for o in ret.output:
         if o not in ('mempool', 'blockstream', 'bitcoind'):
             raise ConfigError('value %s is not a valid output' % o)
-        if o in ('bitcoind'):
-            raise ConfigError('output %s not yet implemented' % o)
+        if o == 'bitcoind' and (not ret.user or not ret.password):
+            raise ConfigError('--user and --password required when output includes bitcoind')
 
     return ret
 
@@ -82,8 +123,13 @@ async def main(args):
     # options this are defaults, TODO: from cmd line and toml file
     # relays to output to
     relays = args.relay.split(',')
+
     # default to main net
     network = args.network
+
+    # rpc user and password if output via bitcoind
+    user = args.user
+    password = args.password
 
     # create the tx broadcasters, TODO: which ones enabled should be from cmd line
     handlers = []
@@ -95,6 +141,11 @@ async def main(args):
     if 'blockstream' in args.output:
         handlers.append(APIEventHandler(api_name='blockstream',
                                         network=network))
+
+    if 'bitcoind' in args.output:
+        handlers.append(BitcoindEventHandler(user=user,
+                                             password=password,
+                                             network=network))
 
     def on_connect(the_client: Client):
         the_client.subscribe(sub_id='btc_txs',
@@ -112,5 +163,8 @@ async def main(args):
 
 
 if __name__ == "__main__":
-    logging.getLogger().setLevel(logging.ERROR)
-    asyncio.run(main(get_args()))
+    logging.getLogger().setLevel(logging.DEBUG)
+    try:
+        asyncio.run(main(get_args()))
+    except ConfigError as ce:
+        print(ce)
