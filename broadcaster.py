@@ -221,7 +221,7 @@ async def main(args):
 
 
 if __name__ == "__main__":
-    logging.getLogger().setLevel(logging.DEBUG)
+    logging.getLogger().setLevel(logging.ERROR)
     try:
         asyncio.run(main(get_args()))
     except ConfigError as ce:
