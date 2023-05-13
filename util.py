@@ -7,6 +7,20 @@ from monstr.event.event import Event
 from monstr.encrypt import Keys
 
 
+# url mapping to mempool.space api
+MEMPOOL_URL_MAP ={
+    'mainnet': 'https://mempool.space/api/tx',
+    'testnet': 'https://mempool.space/testnet/api/tx',
+    'signet': 'https://mempool.space/signet/api/tx"'
+}
+
+# for blockstram api
+BLOCKSTREAM_URL_MAP = {
+    'mainnet': 'https://blockstream.info/api/tx',
+    'testnet': 'https://blockstream.info/testnet/api/tx'
+}
+
+
 def is_valid_tx(tx_hex: str) -> bool:
     # if we can parse tx_hex it's valid I guess
     ret = False

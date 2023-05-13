@@ -7,7 +7,7 @@ import argparse
 from argparse import Namespace
 from util import is_valid_tx
 from monstr.client.client import ClientPool
-from util import get_nostr_bitcoin_tx_event, APIServiceURLMap, post_hex_tx_api, ConfigError
+from util import get_nostr_bitcoin_tx_event, post_hex_tx_api, ConfigError, BLOCKSTREAM_URL_MAP, MEMPOOL_URL_MAP
 
 
 class InvalidTxHex(Exception):
@@ -24,14 +24,20 @@ def load_tx(filename):
 
 def get_args():
     parser = argparse.ArgumentParser(
-        prog='bitcoin transaction broadcaster',
-        description='broadcast raw bitcoin txs to nostr or direct to mempool, blockstreaminfo, or via local bitcoin node'
+        prog='bitcoin transaction poster',
+        description='post raw bitcoin txs to nostr or direct to mempool, blockstreaminfo, or via local bitcoin node'
     )
 
-    parser.add_argument('-r', '--relay', action='store', default='ws://localhost:8081',
-                        help='when --output includes nostr this is a comma seperated list of relays to post to')
-    parser.add_argument('-n', '--network', action='store', default='mainnet',  choices=['mainnet', 'testnet', 'signet'],
-                        help='bitcoin network for the bitcoin transactions to be posted on')
+    # defaults
+    def_relay = 'ws://localhost:8081'
+    def_network = 'mainnet'
+    def_output = 'nostr'
+
+
+    parser.add_argument('-r', '--relay', action='store', default=def_relay,
+                        help='when --output includes nostr this is a comma seperated list of relays to post to - default %s' % def_relay)
+    parser.add_argument('-n', '--network', action='store', default=def_network,  choices=['mainnet', 'testnet', 'signet'],
+                        help='bitcoin network for the bitcoin transactions to be posted on - default %s' % def_network)
     parser.add_argument('-e', '--hex', action='store', default=None,
                         help='raw bitcoin tx hex')
     parser.add_argument('-f', '--filename', action='store', default=None,
@@ -42,10 +48,10 @@ def get_args():
                         help="""with -d option keep running and monitor directory broadcasting txs as they are created.
                         A subdir ./done will be created and txn files will be moved there after being broadcast.
                         """)
-    parser.add_argument('-o', '--output', action='store', default='nostr',
+    parser.add_argument('-o', '--output', action='store', default=def_output,
                         help="""comma seperated list of outputs to broadcast txs valid values are nostr, mempool, blockstream, or
-                        bitcoind
-                        """)
+                        bitcoind - default %s
+                        """ % def_output)
 
     parser.add_argument('--debug', action='store_true', help='enable debug output')
 
@@ -102,26 +108,24 @@ def get_args():
 
 async def main(args: Namespace):
 
-    api_mappers = {
-        'mempool': APIServiceURLMap('mempool'),
-        'blockstream': APIServiceURLMap('blockstream')
-    }
-
     def post_tx_nostr(tx_hex: str):
         cp.publish(get_nostr_bitcoin_tx_event(tx_hex=tx_hex,
                                               network=args.network))
 
     def get_post_api(api):
-        mapper = api_mappers[api]
+        url_map = {
+            'mempool': MEMPOOL_URL_MAP,
+            'blockstream': BLOCKSTREAM_URL_MAP
+        }
 
         def api_post(tx_hex: str):
             try:
-                to_url = mapper.get_url_map(args.network)
+                to_url = url_map[args.network]
                 asyncio.create_task(post_hex_tx_api(to_url=to_url,
                                                     tx_hex=tx_hex))
-            except ValueError as ve:
+            except KeyError as ke:
                 logging.info('post_tx to %s - unable to broadcast event err - %s' % (api,
-                                                                                     ve))
+                                                                                     ke))
 
         return api_post
 

@@ -14,20 +14,9 @@ from abc import ABC, abstractmethod
 from monstr.client.client import ClientPool, Client
 from monstr.client.event_handlers import EventHandler
 from monstr.event.event import Event
-from util import ConfigError, post_hex_tx_api, sendrawtransaction_bitcoind, get_event_network, is_valid_tx
+from util import ConfigError, post_hex_tx_api, sendrawtransaction_bitcoind, get_event_network, is_valid_tx,\
+    BLOCKSTREAM_URL_MAP, MEMPOOL_URL_MAP
 
-# url mapping to mempool.space api
-MEMPOOL_URL_MAP ={
-    'mainnet': 'https://mempool.space/api/tx',
-    'testnet': 'https://mempool.space/testnet/api/tx',
-    'signet': 'https://mempool.space/signet/api/tx"'
-}
-
-# for blockstram api
-BLOCKSTREAM_URL_MAP = {
-    'mainnet': 'https://blockstream.info/api/tx',
-    'testnet': 'https://blockstream.info/testnet/api/tx'
-}
 
 class UnsupportedNetwork(Exception):
     pass
