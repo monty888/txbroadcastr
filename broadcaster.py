@@ -10,71 +10,127 @@
 import logging
 import asyncio
 import argparse
+from abc import ABC, abstractmethod
 from monstr.client.client import ClientPool, Client
 from monstr.client.event_handlers import EventHandler
 from monstr.event.event import Event
-from util import post_event_tx_api, APIServiceURLMap, ConfigError, sendrawtransaction_bitcoind
+from util import ConfigError, post_hex_tx_api, sendrawtransaction_bitcoind, get_event_network, is_valid_tx
+
+# url mapping to mempool.space api
+MEMPOOL_URL_MAP ={
+    'mainnet': 'https://mempool.space/api/tx',
+    'testnet': 'https://mempool.space/testnet/api/tx',
+    'signet': 'https://mempool.space/signet/api/tx"'
+}
+
+# for blockstram api
+BLOCKSTREAM_URL_MAP = {
+    'mainnet': 'https://blockstream.info/api/tx',
+    'testnet': 'https://blockstream.info/testnet/api/tx'
+}
+
+class UnsupportedNetwork(Exception):
+    pass
 
 
-class APIEventHandler(EventHandler):
-
-    def __init__(self, api_name: str, network: str = 'any'):
-        self._api_name = api_name
-        self._map = APIServiceURLMap(service_name=api_name)
-        self._network = network
-
-    def do_event(self, the_client: Client, sub_id, evt: Event):
-        network_tags = evt.get_tags_value('network')
-        if network_tags is None:
-            logging.debug('%s::do_event - event missing network tag: %s' % evt)
-            return
-
-        network = network_tags[0]
-        if self._network != 'any' and network != self._network:
-            logging.debug('%s::do_event - ignore event: %s for network %s' % (evt,
-                                                                              network))
-            return
-
-        try:
-            asyncio.create_task(post_event_tx_api(evt=evt,
-                                                  to_url=self._map.get_url_map(network)))
-        except ValueError as ve:
-            logging.info('%s::do_event - unable to broadcast event err - %s' % (self._api_name,
-                                                                                ve))
+class InvalidTxHex(Exception):
+    pass
 
 
-class BitcoindEventHandler(EventHandler):
+class BroadCaster(ABC):
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def supported_networks(self) -> set:
+        return set(self._url_map.keys())
+
+    @abstractmethod
+    async def broadcast_hex(self, tx_hex: str, network: str):
+        pass
+
+
+class APIBroadcaster(BroadCaster):
     """
-        as APIEventHandler but to local bitcoind
+        broadcaster via a webapi where
+        url_map is a dict of network<>url endpoints
+
     """
-    def __init__(self, user: str, password: str, network: str = 'any'):
-        self._map = APIServiceURLMap(service_name='bitcoind')
+    def __init__(self, name: str, url_map: dict):
+        self._name = name
+        self._url_map = url_map
+
+    async def broadcast_hex(self, tx_hex: str, network: str):
+        await post_hex_tx_api(to_url=self._url_map[network],
+                              tx_hex=tx_hex)
+
+
+class BitcoindBroadcaster(BroadCaster):
+    """
+        broadcaster via bitcoind
+    """
+    def __init__(self, user: str, password: str):
+        self._name = 'bitcoind'
         self._user = user
         self._password = password
+
+        # hardcode to to defaults for now
+        self._url_map = {
+            'mainnet': 'http://localhost:8332',
+            'testnet': 'http://localhost:18332',
+            'signet': 'http://localhost:38332'
+        }
+
+    async def broadcast_hex(self, tx_hex: str, network: str):
+        await sendrawtransaction_bitcoind(self._url_map[network],
+                                          user=self._user,
+                                          password=self._password,
+                                          tx_hex=tx_hex)
+
+
+class BroadcasterHandler(EventHandler):
+
+    def __init__(self, broadcaster: BroadCaster, network: str = 'any'):
+        self._broadcaster = broadcaster
         self._network = network
 
     def do_event(self, the_client: Client, sub_id, evt: Event):
-        network_tags = evt.get_tags_value('network')
-        if network_tags is None:
-            logging.debug('%s::do_event - event missing network tag: %s' % evt)
-            return
-
-        network = network_tags[0]
-        if self._network != 'any' and network != self._network:
-            logging.debug('%s::do_event - ignore event: %s for network %s' % (evt,
-                                                                              network))
-            return
+        """
+        checks event contains valid tx hex and a network to broadcast then uses the given broadcasters
+        broadcast_hex func
+        :param the_client:
+        :param sub_id:
+        :param evt:
+        :return:
+        """
 
         try:
-            # TODO: ix the test tx/post to make it a bit cleaner between this and the url style posters
-            asyncio.create_task(sendrawtransaction_bitcoind(to_url=self._map.get_url_map(network),
-                                                            user=self._user,
-                                                            password=self._password,
-                                                            tx_hex=evt.content))
-            # asyncio.create_task(post_event_tx_api(evt=evt,
-            #                                       to_url=self._map.get_url_map(network)))
-        except ValueError as ve:
-            logging.info('bitcoind::do_event - unable to broadcast event err - %s' % ve)
+            # we could default to a network if not network tag but for now ignore
+            network = get_event_network(evt)
+            if not network:
+                raise ValueError('BroadcasterHandler::do_event - event missing network tag - %s' % evt)
+
+            # are we broadcasting events for this network?
+            if self._network == 'any' or self._network == network:
+                # is the network one supported by our broadcaster
+                if network not in self._broadcaster.supported_networks:
+                    raise UnsupportedNetwork('BroadcasterHandler::do_event network %s not supported by %s' % (network,
+                                                                                                              self._broadcaster.name))
+
+                # is the content a valid bitcoin tx, note we don't do any other checks (e.g. of set kind)
+                tx_hex = evt.content
+                if not is_valid_tx(tx_hex):
+                    raise InvalidTxHex(
+                        'BroadcasterHandler::do_event - event content does\'t look valid bitcoin tx hex - %s' % tx_hex)
+
+                # finally we can attempt to broadcast the tx
+                asyncio.create_task(self._broadcaster.broadcast_hex(tx_hex=tx_hex,
+                                                                    network=network))
+
+        except (InvalidTxHex, ValueError) as e:
+            print(e)
 
 
 def get_args():
@@ -135,17 +191,19 @@ async def main(args):
     handlers = []
     if 'mempool' in args.output:
         handlers.append(
-            APIEventHandler(api_name='mempool',
-                            network=network)
+            BroadcasterHandler(APIBroadcaster(name='mempool',
+                                              url_map=MEMPOOL_URL_MAP))
         )
+
     if 'blockstream' in args.output:
-        handlers.append(APIEventHandler(api_name='blockstream',
-                                        network=network))
+        handlers.append(
+            BroadcasterHandler(APIBroadcaster(name='blockstream',
+                                              url_map=BLOCKSTREAM_URL_MAP))
+        )
 
     if 'bitcoind' in args.output:
-        handlers.append(BitcoindEventHandler(user=user,
-                                             password=password,
-                                             network=network))
+        handlers.append(BroadcasterHandler(BitcoindBroadcaster(user=user,
+                                                               password=password)))
 
     def on_connect(the_client: Client):
         the_client.subscribe(sub_id='btc_txs',
