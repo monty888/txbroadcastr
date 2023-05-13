@@ -30,6 +30,15 @@ options:
                         rpc password for bitcoind, required if output bitcoind
   --debug               enable debug output
 ```
+__examples__  
+```
+$ python broadcaster.py
+```
+listen for bitcoin tx events on local relay ws://localhost:8081 and broadcast to mempool.space
+```
+python broadcaster.py -r wss://nos.lol -o bitcoind --user=monty --password=password
+```
+listen for bitcoin tx events on wss://nos.lol and post to local bitcoind instance
 
 # poster
 
@@ -59,10 +68,13 @@ options:
   --debug               enable debug output
 ```
 __examples__  
-$ python poster.py --hex '02...'  
+```
+$ python poster.py --hex '02...'
+```  
 posts given hex bitcoin tx, by default this will be to nostr and tagged as a mainnet tx   
-
+```
 $ python poster.py --dir /home/monty/bitcoin_txs/ -o mempool -w
+```
 watches /home/monty/bitcoin_txs/ and posts *.txn files saved there to mempool.space api,
 by default the txs will be posted to mainnet
 
