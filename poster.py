@@ -4,10 +4,24 @@ import os
 import glob
 import shutil
 import argparse
+from pathlib import Path
 from argparse import Namespace
 from util import is_valid_tx
 from monstr.client.client import ClientPool
-from util import get_nostr_bitcoin_tx_event, post_hex_tx_api, ConfigError, BLOCKSTREAM_URL_MAP, MEMPOOL_URL_MAP
+from util import get_nostr_bitcoin_tx_event, post_hex_tx_api, ConfigError, \
+    BLOCKSTREAM_URL_MAP, MEMPOOL_URL_MAP,load_toml
+
+# options can be in this file rather than given at command line
+CONFIG_FILE = f'{Path.home()}/.nostrpy/tx_poster.toml'
+
+# default relay
+DEFAULT_RELAY = 'ws://localhost:8081'
+
+# default network for broadcasting txs on
+DEFAULT_NETWORK = 'mainnet'
+
+# default service to use broadcasting txs
+DEFAULT_OUTPUT = 'mempool'
 
 
 class InvalidTxHex(Exception):
@@ -22,156 +36,225 @@ def load_tx(filename):
         return tx_data
 
 
-def get_args():
+def get_cmdline_args(args):
     parser = argparse.ArgumentParser(
         prog='bitcoin transaction poster',
         description='post raw bitcoin txs to nostr or direct to mempool, blockstreaminfo, or via local bitcoin node'
     )
 
-    # defaults
-    def_relay = 'ws://localhost:8081'
-    def_network = 'mainnet'
-    def_output = 'nostr'
-
-
-    parser.add_argument('-r', '--relay', action='store', default=def_relay,
-                        help='when --output includes nostr this is a comma seperated list of relays to post to - default %s' % def_relay)
-    parser.add_argument('-n', '--network', action='store', default=def_network,  choices=['mainnet', 'testnet', 'signet'],
-                        help='bitcoin network for the bitcoin transactions to be posted on - default %s' % def_network)
+    parser.add_argument('-r', '--relay', action='store', default=args['relay'],
+                        help=f'when --output includes nostr this is a comma seperated list of relays to post to, default [{args["relay"]}]')
+    parser.add_argument('-n', '--network', action='store', default=args['network'],  choices=['mainnet', 'testnet', 'signet'],
+                        help=f'bitcoin network for the bitcoin transactions to be posted on,  default [{args["network"]}]')
     parser.add_argument('-e', '--hex', action='store', default=None,
                         help='raw bitcoin tx hex')
     parser.add_argument('-f', '--filename', action='store', default=None,
                         help='filename for file containing raw bitcoin tx hex')
-    parser.add_argument('-d', '--dir', action='store', default=None,
-                        help='directory containing *.txn raw bitcoin tx files')
-    parser.add_argument('-w', '--watch', action='store_true', default=False,
-                        help="""with -d option keep running and monitor directory broadcasting txs as they are created.
+    parser.add_argument('-d', '--dir', action='store', default=args['dir'],
+                        help=f'directory containing *.txn raw bitcoin tx files, default[{args["dir"]}]')
+    parser.add_argument('-w', '--watch', action='store_true', default=args["watch"],
+                        help=f"""with -d option keep running and monitor directory broadcasting txs as they are created.
                         A subdir ./done will be created and txn files will be moved there after being broadcast.
+                        default [{args["watch"]}]
                         """)
-    parser.add_argument('-o', '--output', action='store', default=def_output,
-                        help="""comma seperated list of outputs to broadcast txs valid values are nostr, mempool, blockstream, or
-                        bitcoind - default %s
-                        """ % def_output)
+    parser.add_argument('-o', '--output', action='store', default=args["output"],
+                        help=f"""comma seperated list of outputs to broadcast txs valid values are nostr, mempool, blockstream, or
+                        bitcoind - default {args["output"]}
+                        """)
 
     parser.add_argument('--debug', action='store_true', help='enable debug output')
 
     ret = parser.parse_args()
-    if ret.debug:
+
+    return vars(ret)
+
+
+def get_args() -> dict:
+    """
+    get args to use order is
+        default -> toml_file -> cmd_line options
+
+    so command line option is given priority if given
+
+    :return: {}
+    """
+
+    # set up the defaults if not overriden
+    ret = {
+        'relay': DEFAULT_RELAY,
+        'network': DEFAULT_NETWORK,
+        'output': DEFAULT_OUTPUT,
+        'hex': None,
+        'filename': None,
+        'file_data': None,
+        'dir': None,
+        'watch': False,
+        'debug': False
+    }
+
+    # now form config file if any
+    ret.update(load_toml(CONFIG_FILE))
+
+    # now from cmd line
+    ret.update(get_cmdline_args(ret))
+
+    # if debug flagged enable now
+    if ret['debug'] is True:
         logging.getLogger().setLevel(logging.DEBUG)
 
+    # extra checks on the config we have to make sure it makes sense
+
     # if hex given check if looks valid
-    if ret.hex:
-        if not is_valid_tx(ret.hex):
-            raise ConfigError('invalid tx hex: %s' % ret.hex)
+    if ret['hex']:
+        if not is_valid_tx(ret['hex']):
+            raise ConfigError(f'invalid tx hex: {ret["hex"]}')
 
     # if file read it
-    if ret.filename:
+    if ret['filename']:
         try:
-            ret.file_data = load_tx(ret.filename)
+            ret['file_data'] = load_tx(ret['filename'])
         except InvalidTxHex as itx:
             raise ConfigError(str(itx))
         except Exception as e:
-            raise ConfigError('something went wrong reading file: %s' % ret.filename)
+            raise ConfigError(f'something went wrong reading file: {ret["filename"]}')
 
-    if ret.dir:
-        if not os.path.isdir(ret.dir):
-            raise ConfigError('%s doesn\'t look like a directory' % ret.dir)
+    if ret['dir']:
+        if not os.path.isdir(ret['dir']):
+            raise ConfigError(f'{ret["dir"]} doesn\'t look like a directory')
         # make the done dir if it doesn't exist
-        if not os.path.isdir(ret.dir+'/done'):
+        if not os.path.isdir(f'ret["dir"]/done'):
             try:
-                os.makedirs(ret.dir+'/done')
+                os.makedirs(f'ret["dir"]/done')
             except Exception as e:
-                raise ConfigError('unable to make done dir at: %s' % ret.dir)
+                raise ConfigError(f'unable to make done dir at: {ret["dir"]}')
 
-    if not ret.hex and not ret.filename and not ret.dir:
+    if not ret['hex'] and not ret['filename'] and not ret['dir']:
         raise ConfigError('at least one of --hex, --filename, or --dir is required')
 
     # split the outputs
-    ret.output = ret.output.split(',')
-    for o in ret.output:
+    ret['output'] = ret['output'].split(',')
+    for o in ret['output']:
         if o not in ('nostr', 'mempool', 'blockstream', 'bitcoind'):
-            raise ConfigError('value %s is not a valid output' % o)
+            raise ConfigError(f'value {o} is not a valid output')
         if o in ('bitcoind'):
-            raise ConfigError('output %s not yet implemented' % o)
+            raise ConfigError(f'output {o} not yet implemented')
 
-    if ret.watch:
-        if not ret.dir:
+    if ret['watch']:
+        if not ret['dir']:
             raise ConfigError('--watch only valid where a directory is supplied')
 
     # if nostr then relay needs to defined
-    if 'nostr' in ret.output:
-        if ret.relay is None:
+    if 'nostr' in ret['output']:
+        if ret['relay'] is None:
             raise ConfigError('output nostr but no relays given!')
+
+
+    logging.debug(f'new_get_args:: running with options - {ret}')
 
     return ret
 
 
-async def main(args: Namespace):
+def get_postr_nostr(the_client: ClientPool, network: str):
+    def nostr_post(tx_hex: str):
+        the_client.publish(get_nostr_bitcoin_tx_event(tx_hex=tx_hex,
+                                                      network=network))
 
-    def post_tx_nostr(tx_hex: str):
-        cp.publish(get_nostr_bitcoin_tx_event(tx_hex=tx_hex,
-                                              network=args.network))
+    return nostr_post
 
-    def get_post_api(api):
-        url_map = {
-            'mempool': MEMPOOL_URL_MAP,
-            'blockstream': BLOCKSTREAM_URL_MAP
-        }
 
-        def api_post(tx_hex: str):
-            try:
-                to_url = url_map[args.network]
-                asyncio.create_task(post_hex_tx_api(to_url=to_url,
-                                                    tx_hex=tx_hex))
-            except KeyError as ke:
-                logging.info('post_tx to %s - unable to broadcast event err - %s' % (api,
-                                                                                     ke))
-
-        return api_post
-
-    my_posters = {
-        'nostr': post_tx_nostr,
-        'mempool': get_post_api('mempool'),
-        'blockstream': get_post_api('blockstream')
+def get_post_api(api, network: str):
+    url_map = {
+        'mempool': MEMPOOL_URL_MAP,
+        'blockstream': BLOCKSTREAM_URL_MAP
     }
 
-    def do_tx_post(tx_hex: str):
-        for c_out in args.output:
-            my_posters[c_out](tx_hex)
+    def api_post(tx_hex: str):
+        try:
+            to_url = url_map[api][network]
+            asyncio.create_task(post_hex_tx_api(to_url=to_url,
+                                                tx_hex=tx_hex))
+        except KeyError as ke:
+            logging.info(f'post_tx to {api} - unable to broadcast event err - {ke}')
 
-    def post_files(dir: str):
-        # find tx files
-        tx_files = glob.glob('%s/*.txn' % dir)
+    return api_post
 
-        for c_filename in tx_files:
-            try:
-                tx_hex = load_tx(c_filename)
-            # TODO: create a error dir and move file there
-            except InvalidTxHex as bad_file:
-                pass
 
-            # post the tx and then move the file to dir/done
-            do_tx_post(tx_hex)
-            shutil.move(c_filename, c_filename.replace(dir.strip('/'), '%s/done' % dir))
+def post_files(the_dir: str, outputs: []):
+    # find tx files
+    tx_files = glob.glob('%s/*.txn' % the_dir)
 
-    async with ClientPool(clients=args.relay) as cp:
+    for c_filename in tx_files:
+        try:
+            tx_hex = load_tx(c_filename)
+        # TODO: create a error dir and move file there
+        except InvalidTxHex as bad_file:
+            pass
 
-        # posting of any hex supplied as arg
-        if args.hex:
-            do_tx_post(args.hex)
+        # post the tx and then move the file to dir/done
+        [c_out(tx_hex) for c_out in outputs]
 
-        # # filename option, file_data should exist
-        if args.filename:
-            do_tx_post(args.file_data)
+        # not we don't actually check if we succeeded in outputing...
+        shutil.move(c_filename, c_filename.replace(the_dir.strip('/'), '%s/done' % the_dir))
 
-        if args.dir:
-            post_files(args.dir)
 
-        if args.watch:
-            print('watching for bitcoin transactions at: %s' % args.dir)
-            while True:
-                await asyncio.sleep(1)
-                post_files(args.dir)
+async def main(args: dict):
+
+    # to connect to
+    relay = args['relay']
+
+    # the actual client
+    my_client = ClientPool(relay)
+
+    # publish to this network
+    network = args['network']
+
+    # this may be set if just doing a one off
+    tx_hex = args['hex']
+
+    # may be set if one off from a file
+    file_data = args['file_data']
+
+    # may be one off sweep or we might watch
+    tx_dir = args['dir']
+
+    # in combo with dir, watch that dir for new txs
+    watch = args['watch']
+
+    my_posters = {
+        'nostr': get_postr_nostr(my_client, network),
+        'mempool': get_post_api('mempool', network),
+        'blockstream': get_post_api('blockstream', network)
+    }
+
+    outputs = []
+    for out_name in args['output']:
+        outputs.append(my_posters[out_name])
+
+    # only connect relay if we're outputing via nostrr
+    if 'nostr' in args['output']:
+        asyncio.create_task(my_client.run())
+        await my_client.wait_connect()
+        print('connect to nostr relays')
+
+
+    # posting of any hex supplied as arg
+    if tx_hex:
+        [c_out(tx_hex) for c_out in outputs]
+
+    # filename option, file_data should exist
+    if file_data:
+        [c_out(file_data) for c_out in outputs]
+
+    # any files in this dir
+    if tx_dir:
+        post_files(tx_dir, outputs)
+
+    # if watch then we'll hang around and watch that dir for new *.txn files
+    if watch:
+        print(f'watching for bitcoin transactions at: {tx_dir} output to {args["output"]}')
+        while True:
+            await asyncio.sleep(1)
+            post_files(tx_dir, outputs)
 
         # hack so don't exit before we actually manage to send any we're not staying running
         # better to check notices/sub and see events probably
