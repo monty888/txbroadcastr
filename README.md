@@ -6,8 +6,17 @@ and broadcasts the events content as bitcoin tx via mempool.space, blockstream, 
 * poster.py - posts bitcoin transactions to nostr, or directly to a service.
 Can be done as one off or monitor a directory for *.txn signed transaction files.
 
+# install
+> git clone --recurse-submodules https://github.com/monty888/txbroadcastr.git  
+> cd monstr_terminal  
+> python3 -m venv venv   
+> source venv/bin/activate   
+> pip install -r requirements.txt   
+> pip install ./monstr
+
+
 # broadcaster
-```
+```commandline
 usage: nostr bitcointx broadcaster [-h] [-r RELAY]
                                    [-n {any,mainnet,testnet,signet}]
                                    [-o OUTPUT] [-u USER] [-p PASSWORD]
@@ -42,7 +51,7 @@ listen for bitcoin tx events on wss://nos.lol and post to local bitcoind instanc
 
 # poster
 
-```
+```commandline
 usage: bitcoin transaction poster [-h] [-r RELAY] [-n {mainnet,testnet,signet}] [-e HEX] [-f FILENAME]
                                   [-d DIR] [-w] [-o OUTPUT] [--debug]
 
@@ -80,6 +89,6 @@ by default the txs will be posted to mainnet
 
 
 # todo
-- [ ] configs from toml file 
+- [x] configs from toml file 
 - [ ] instead of network tag change to use magic and network magic nums
 - [ ] change using nostr event content for the tx value to being held within tags.
