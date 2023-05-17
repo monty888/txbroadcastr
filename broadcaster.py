@@ -8,6 +8,7 @@
 
 """
 import logging
+from copy import copy
 import asyncio
 import argparse
 from pathlib import Path
@@ -206,12 +207,11 @@ def get_args() -> dict:
         if o == 'bitcoind' and (not ret['user'] or not ret['password']):
             raise ConfigError('--user and --password required when output includes bitcoind')
 
-    ret_out = ret
+    ret_out = copy(ret)
     if ret['password']:
         ret_out['password'] = '****'
 
     logging.debug(f'new_get_args:: running with options - {ret}')
-
 
     return ret
 

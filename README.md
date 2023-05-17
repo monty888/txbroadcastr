@@ -8,7 +8,7 @@ Can be done as one off or monitor a directory for *.txn signed transaction files
 
 # install
 > git clone --recurse-submodules https://github.com/monty888/txbroadcastr.git  
-> cd monstr_terminal  
+> cd txbroadcastr  
 > python3 -m venv venv   
 > source venv/bin/activate   
 > pip install -r requirements.txt   
