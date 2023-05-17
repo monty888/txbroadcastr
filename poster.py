@@ -122,9 +122,9 @@ def get_args() -> dict:
         if not os.path.isdir(ret['dir']):
             raise ConfigError(f'{ret["dir"]} doesn\'t look like a directory')
         # make the done dir if it doesn't exist
-        if not os.path.isdir(f'ret["dir"]/done'):
+        if not os.path.isdir(f'{ret["dir"]}/done'):
             try:
-                os.makedirs(f'ret["dir"]/done')
+                os.makedirs(f'{ret["dir"]}/done')
             except Exception as e:
                 raise ConfigError(f'unable to make done dir at: {ret["dir"]}')
 
